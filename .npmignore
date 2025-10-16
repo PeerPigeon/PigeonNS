@@ -1,0 +1,17 @@
+# Test files
+tests/
+*.test.js
+
+# Examples
+examples/
+
+# Development files
+.git/
+.gitignore
+jest.config.js
+
+# Documentation
+*.md
+
+# CI/CD
+.github/
