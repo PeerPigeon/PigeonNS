@@ -15,9 +15,9 @@ describe('MDNSResolver Integration', () => {
     });
   });
 
-  afterEach(() => {
-    if (resolver.mdns) {
-      resolver.stop();
+  afterEach(async () => {
+    if (resolver && resolver.mdns) {
+      await resolver.stop();
     }
   });
 
@@ -282,14 +282,14 @@ describe('MDNSResolver Integration', () => {
       // Start a pending query
       const queryPromise = resolver.resolve('pending.local');
 
-      // Stop resolver
-      resolver.stop();
+  // Stop resolver and wait for underlying socket to close
+  await resolver.stop();
 
-      // mdns should be null
-      expect(resolver.mdns).toBeNull();
+  // mdns should be null
+  expect(resolver.mdns).toBeNull();
 
-      // Pending query should reject
-      await expect(queryPromise).rejects.toThrow('Resolver stopped');
+  // Pending query should reject
+  await expect(queryPromise).rejects.toThrow('Resolver stopped');
     });
   });
 });

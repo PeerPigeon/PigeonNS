@@ -11,9 +11,9 @@ describe('MDNSResolver', () => {
     });
   });
 
-  afterEach(() => {
-    if (resolver.mdns) {
-      resolver.stop();
+  afterEach(async () => {
+    if (resolver && resolver.mdns) {
+      await resolver.stop();
     }
   });
 
