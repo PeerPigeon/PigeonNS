@@ -1,2 +1,2 @@
 # PigeonNS
-A local-only mDNS resolver 
+A local-only mDNS name server 
