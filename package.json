@@ -1,0 +1,37 @@
+{
+  "name": "pigeonns",
+  "version": "1.0.0",
+  "description": "A local-only mDNS resolver for WebRTC and local network discovery",
+  "main": "index.js",
+  "bin": {
+    "pigeonns": "./cli.js"
+  },
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "start": "node cli.js"
+  },
+  "keywords": [
+    "mdns",
+    "dns",
+    "resolver",
+    "webrtc",
+    "ice",
+    "local",
+    "discovery",
+    "multicast"
+  ],
+  "author": "",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PeerPigeon/PigeonNS.git"
+  },
+  "dependencies": {
+    "dns-packet": "^5.6.1",
+    "multicast-dns": "^7.2.5"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0"
+  }
+}
