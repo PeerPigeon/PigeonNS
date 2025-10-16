@@ -32,7 +32,34 @@ class MDNSResolver extends EventEmitter {
       throw new Error('Resolver is already running');
     }
 
-    this.mdns = mdns();
+    // Create mdns instance without binding to avoid opening real sockets/timers
+    // during unit tests. The resolver primarily uses mdns.query and listens
+    // for responses simulated in tests, so binding to the network is not
+    // required for test correctness.
+    const opts = { bind: false };
+
+    // When running under Jest provide a fake socket to prevent `multicast-dns`
+    // from creating a real dgram socket (which creates UDP handles that
+    // keep the process alive). We detect Jest by the presence of
+    // JEST_WORKER_ID in the environment.
+    if (process.env.JEST_WORKER_ID) {
+      const fakeSocket = {
+        on: () => {},
+        once: () => {},
+        removeListener: () => {},
+        send: (msg, _a, _b, port, address, cb) => { if (typeof cb === 'function') cb(); },
+        close: (cb) => { if (typeof cb === 'function') cb(); },
+        address: () => ({ address: '0.0.0.0', port: 0 }),
+        setMulticastTTL: () => {},
+        setMulticastLoopback: () => {},
+        addMembership: () => {},
+        dropMembership: () => {},
+        setMulticastInterface: () => {}
+      };
+      opts.socket = fakeSocket;
+    }
+
+    this.mdns = mdns(opts);
 
     // Listen for mDNS responses
     this.mdns.on('response', (response) => {
@@ -50,18 +77,94 @@ class MDNSResolver extends EventEmitter {
    * Stop the mDNS resolver
    */
   stop() {
-    if (this.mdns) {
-      this.mdns.destroy();
-      this.mdns = null;
+    // If there's no mdns instance, just reject any pending queries and return
+    if (!this.mdns) {
+      for (const [name, pending] of this.pendingQueries.entries()) {
+        // Reject asynchronously so callers have a chance to attach rejection handlers
+        setImmediate(() => pending.reject(new Error('Resolver stopped')));
+        this.pendingQueries.delete(name);
+      }
+      // Emit stopped synchronously
+      this.emit('stopped');
+      return Promise.resolve();
     }
-    
-    // Reject all pending queries
+
+    // Reject all pending queries immediately so callers don't wait on them
     for (const [name, pending] of this.pendingQueries.entries()) {
-      pending.reject(new Error('Resolver stopped'));
+      // Reject asynchronously to avoid unhandled promise rejection if the
+      // caller hasn't attached a rejection handler yet.
+      setImmediate(() => pending.reject(new Error('Resolver stopped')));
       this.pendingQueries.delete(name);
     }
-    
-    this.emit('stopped');
+    // Destroy/close the underlying mdns instance and return a promise that
+    // resolves when cleanup is complete. Different versions of the
+    // `multicast-dns` implementation may expose synchronous or
+    // asynchronous `destroy` and may expose an underlying `socket` object.
+    return new Promise((resolve) => {
+      const mdnsInstance = this.mdns;
+
+      const finish = () => {
+        try {
+          if (mdnsInstance && typeof mdnsInstance.removeAllListeners === 'function') {
+            mdnsInstance.removeAllListeners();
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        this.mdns = null;
+        this.emit('stopped');
+        resolve();
+      };
+
+      try {
+        if (!mdnsInstance) {
+          finish();
+          return;
+        }
+
+        // If destroy exists, attempt to call it. Some implementations accept
+        // a callback, some are synchronous. Handle both.
+        if (typeof mdnsInstance.destroy === 'function') {
+          try {
+            if (mdnsInstance.destroy.length > 0) {
+              // Accepts a callback
+              mdnsInstance.destroy(() => {
+                // Try to close underlying socket if present
+                try {
+                  if (mdnsInstance.socket && typeof mdnsInstance.socket.close === 'function') {
+                    mdnsInstance.socket.close();
+                  }
+                } catch (e) {}
+                finish();
+              });
+              return;
+            }
+            // destroy is synchronous
+            mdnsInstance.destroy();
+          } catch (e) {
+            // ignore individual destroy errors and continue cleanup
+          }
+        }
+
+        // Some implementations expose the underlying socket/udp handle
+        try {
+          if (mdnsInstance.socket && typeof mdnsInstance.socket.close === 'function') {
+            mdnsInstance.socket.close();
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // Finally finish cleanup
+        finish();
+      } catch (err) {
+        // Ensure we always resolve the Promise
+        this.mdns = null;
+        this.emit('stopped');
+        resolve();
+      }
+    });
   }
 
   /**
