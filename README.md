@@ -298,3 +298,4 @@ ISC
 - [RFC 6762 - Multicast DNS](https://tools.ietf.org/html/rfc6762)
 - [WebRTC ICE Candidate Privacy](https://datatracker.ietf.org/doc/html/draft-ietf-rtcweb-mdns-ice-candidates)
  
+A local-only mDNS name server 
