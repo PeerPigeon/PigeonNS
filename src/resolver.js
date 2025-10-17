@@ -32,14 +32,13 @@ class MDNSResolver extends EventEmitter {
       throw new Error('Resolver is already running');
     }
 
-    // Create mdns instance without binding to avoid opening real sockets/timers
-    // during unit tests. The resolver primarily uses mdns.query and listens
-    // for responses simulated in tests, so binding to the network is not
+    // Create mdns instance. Only disable binding during unit tests to avoid 
+    // opening real sockets/timers. The resolver primarily uses mdns.query and 
+    // listens for responses simulated in tests, so binding to the network is not
     // required for test correctness.
-    const opts = { bind: false };
-
-    // When running under Jest provide a fake socket to prevent `multicast-dns`
-    // from creating a real dgram socket (which creates UDP handles that
+    
+    // When running under Jest provide a fake socket and disable binding to prevent 
+    // `multicast-dns` from creating a real dgram socket (which creates UDP handles that
     // keep the process alive). We detect Jest by the presence of
     // JEST_WORKER_ID in the environment.
     if (process.env.JEST_WORKER_ID) {
@@ -56,10 +55,11 @@ class MDNSResolver extends EventEmitter {
         dropMembership: () => {},
         setMulticastInterface: () => {}
       };
-      opts.socket = fakeSocket;
+      this.mdns = mdns({ bind: false, socket: fakeSocket });
+    } else {
+      // In production, create mdns with no options to use defaults (which includes binding)
+      this.mdns = mdns();
     }
-
-    this.mdns = mdns(opts);
 
     // Listen for mDNS responses
     this.mdns.on('response', (response) => {

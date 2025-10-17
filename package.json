@@ -1,6 +1,6 @@
 {
   "name": "pigeonns",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A local-only mDNS resolver for WebRTC and local network discovery",
   "main": "index.js",
   "bin": {
