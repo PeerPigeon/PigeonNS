@@ -34,6 +34,8 @@ npm install -g pigeonns
 
 ### Programmatic API
 
+#### Basic Usage
+
 ```javascript
 const MDNSResolver = require('pigeonns');
 
@@ -61,6 +63,38 @@ try {
 // Stop when done
 resolver.stop();
 ```
+
+#### With HTTP Server for Browsers
+
+Enable an HTTP server to allow browsers to query the resolver:
+
+```javascript
+const MDNSResolver = require('pigeonns');
+
+// Create resolver with HTTP server enabled
+const resolver = new MDNSResolver({
+  server: true,           // Enable HTTP server for browsers
+  serverPort: 5380,       // Port (default: 5380)
+  serverHost: 'localhost', // Host (default: localhost)
+  cors: true              // Enable CORS (default: true)
+});
+
+// Listen for server events
+resolver.on('server-started', ({ url }) => {
+  console.log(`HTTP server started at ${url}`);
+});
+
+// Start resolver and server
+resolver.start();
+
+// Now browsers can query: http://localhost:5380/resolve?name=abc123.local
+```
+
+This enables **both** Node.js and browser access:
+- **Node.js**: Use `resolver.resolve()` directly
+- **Browsers**: Make HTTP requests to the server
+
+See `examples/server.js` for a complete example.
 
 ### Events
 
@@ -92,8 +126,23 @@ resolver.on('cache-cleared', () => {
   console.log('Cache cleared');
 });
 
-// Emitted on errors
+// Emitted when HTTP server starts (if server option is enabled)
+resolver.on('server-started', ({ host, port, url }) => {
+  console.log(`Server started at ${url}`);
+});
+
+// Emitted when HTTP server stops
+resolver.on('server-stopped', () => {
+  console.log('Server stopped');
+});
+
+// Emitted on mDNS errors
 resolver.on('error', (err) => {
+  console.error('Resolver error:', err);
+});
+
+// Emitted on HTTP server errors (if server option is enabled)
+resolver.on('server-error', (err) => {
   console.error('Error:', err);
 });
 
@@ -123,11 +172,82 @@ Monitor all mDNS traffic on your network:
 pigeonns monitor
 ```
 
+Start HTTP API server for browser access:
+
+```bash
+pigeonns serve
+```
+
+Start server on custom port/host:
+
+```bash
+pigeonns serve --port 8080 --host 0.0.0.0
+```
+
 Set custom timeout:
 
 ```bash
 pigeonns resolve abc123.local --timeout 10000
 ```
+
+### HTTP API for Browsers
+
+PigeonNS includes an HTTP API server that allows browsers to resolve mDNS hostnames.
+
+Start the server:
+
+```bash
+pigeonns serve
+```
+
+This starts an HTTP server (default: `http://localhost:5380`) with CORS enabled.
+
+#### API Endpoints
+
+**Resolve a hostname:**
+```
+GET /resolve?name=<hostname>&type=<A|AAAA>
+```
+
+Example:
+```bash
+curl "http://localhost:5380/resolve?name=abc123.local&type=A"
+```
+
+Response:
+```json
+{
+  "hostname": "abc123.local",
+  "type": "A",
+  "address": "192.168.1.100"
+}
+```
+
+**Health check:**
+```
+GET /health
+```
+
+Returns server status and cache information.
+
+#### Browser Usage
+
+```javascript
+// Resolve an mDNS hostname from a browser
+async function resolveMDNS(hostname) {
+  const response = await fetch(
+    `http://localhost:5380/resolve?name=${hostname}&type=A`
+  );
+  const data = await response.json();
+  return data.address;
+}
+
+// Example usage
+const ip = await resolveMDNS('abc123.local');
+console.log(ip); // "192.168.1.100"
+```
+
+See `examples/browser.html` for a complete browser example.
 
 ### Cache Management
 

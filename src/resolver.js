@@ -1,5 +1,6 @@
 const mdns = require('multicast-dns');
 const EventEmitter = require('events');
+const http = require('http');
 
 /**
  * PigeonNS - A local-only mDNS resolver
@@ -16,16 +17,21 @@ class MDNSResolver extends EventEmitter {
       ttl: options.ttl || 120, // Default TTL of 120 seconds
       cacheSize: options.cacheSize || 1000,
       timeout: options.timeout || 5000, // Query timeout in ms
+      server: options.server || false, // Enable HTTP server for browsers
+      serverPort: options.serverPort || 5380,
+      serverHost: options.serverHost || 'localhost',
+      cors: options.cors !== false, // Enable CORS by default
       ...options
     };
     
     this.cache = new Map();
     this.mdns = null;
     this.pendingQueries = new Map();
+    this.httpServer = null;
   }
 
   /**
-   * Start the mDNS resolver
+   * Start the mDNS resolver and optionally the HTTP server
    */
   start() {
     if (this.mdns) {
@@ -70,13 +76,162 @@ class MDNSResolver extends EventEmitter {
       this.emit('error', err);
     });
 
+    // Start HTTP server if enabled
+    if (this.options.server) {
+      this._startHttpServer();
+    }
+
     this.emit('started');
   }
 
   /**
-   * Stop the mDNS resolver
+   * Start HTTP server for browser access
+   * @private
+   */
+  _startHttpServer() {
+    this.httpServer = http.createServer((req, res) => {
+      this._handleHttpRequest(req, res);
+    });
+
+    this.httpServer.listen(this.options.serverPort, this.options.serverHost, () => {
+      this.emit('server-started', {
+        host: this.options.serverHost,
+        port: this.options.serverPort,
+        url: `http://${this.options.serverHost}:${this.options.serverPort}`
+      });
+    });
+
+    this.httpServer.on('error', (err) => {
+      this.emit('server-error', err);
+    });
+  }
+
+  /**
+   * Handle HTTP request
+   * @private
+   */
+  _handleHttpRequest(req, res) {
+    // Enable CORS if configured
+    if (this.options.cors) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+
+    // Handle preflight
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // Only support GET requests
+    if (req.method !== 'GET') {
+      this._sendError(res, 405, 'Method not allowed');
+      return;
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const pathname = url.pathname;
+
+    // Health check endpoint
+    if (pathname === '/health') {
+      this._sendJSON(res, 200, {
+        status: 'ok',
+        cache: {
+          size: this.getCacheSize(),
+          entries: this.getCache()
+        }
+      });
+      return;
+    }
+
+    // Resolution endpoint
+    if (pathname === '/resolve') {
+      const hostname = url.searchParams.get('name') || url.searchParams.get('hostname');
+      const type = url.searchParams.get('type') || 'A';
+
+      if (!hostname) {
+        this._sendError(res, 400, 'Missing required parameter: name or hostname');
+        return;
+      }
+
+      // Resolve the hostname
+      this.resolve(hostname, type)
+        .then((address) => {
+          this._sendJSON(res, 200, {
+            hostname: hostname.endsWith('.local') ? hostname : `${hostname}.local`,
+            type: type,
+            address: address
+          });
+        })
+        .catch((err) => {
+          this._sendError(res, 404, err.message);
+        });
+      return;
+    }
+
+    // Default: API info
+    if (pathname === '/') {
+      this._sendJSON(res, 200, {
+        name: 'PigeonNS mDNS Resolution API',
+        version: '1.0.0',
+        endpoints: {
+          '/resolve': 'Resolve a .local hostname. Params: name (required), type (default: A)',
+          '/health': 'Health check and cache status'
+        },
+        examples: [
+          '/resolve?name=abc123.local',
+          '/resolve?name=device&type=AAAA',
+          '/health'
+        ]
+      });
+      return;
+    }
+
+    // 404 for everything else
+    this._sendError(res, 404, 'Not found');
+  }
+
+  /**
+   * Send JSON response
+   * @private
+   */
+  _sendJSON(res, statusCode, data) {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data, null, 2));
+  }
+
+  /**
+   * Send error response
+   * @private
+   */
+  _sendError(res, statusCode, message) {
+    this._sendJSON(res, statusCode, {
+      error: message,
+      statusCode: statusCode
+    });
+  }
+
+  /**
+   * Stop the mDNS resolver and HTTP server
    */
   stop() {
+    // Stop HTTP server first if it exists
+    const stopHttpServer = () => {
+      return new Promise((resolve) => {
+        if (this.httpServer) {
+          this.httpServer.close(() => {
+            this.httpServer = null;
+            this.emit('server-stopped');
+            resolve();
+          });
+        } else {
+          resolve();
+        }
+      });
+    };
+
     // If there's no mdns instance, just reject any pending queries and return
     if (!this.mdns) {
       for (const [name, pending] of this.pendingQueries.entries()) {
@@ -84,9 +239,10 @@ class MDNSResolver extends EventEmitter {
         setImmediate(() => pending.reject(new Error('Resolver stopped')));
         this.pendingQueries.delete(name);
       }
-      // Emit stopped synchronously
-      this.emit('stopped');
-      return Promise.resolve();
+      // Stop HTTP server and emit stopped
+      return stopHttpServer().then(() => {
+        this.emit('stopped');
+      });
     }
 
     // Reject all pending queries immediately so callers don't wait on them
@@ -113,8 +269,11 @@ class MDNSResolver extends EventEmitter {
         }
 
         this.mdns = null;
-        this.emit('stopped');
-        resolve();
+        // Stop HTTP server before emitting stopped
+        stopHttpServer().then(() => {
+          this.emit('stopped');
+          resolve();
+        });
       };
 
       try {
@@ -177,6 +336,9 @@ class MDNSResolver extends EventEmitter {
     if (!this.mdns) {
       throw new Error('Resolver is not running. Call start() first.');
     }
+
+    // Normalize hostname to lowercase for case-insensitive matching
+    name = name.toLowerCase();
 
     // Ensure name ends with .local
     if (!name.endsWith('.local')) {
@@ -247,7 +409,8 @@ class MDNSResolver extends EventEmitter {
 
     for (const answer of response.answers) {
       if (answer.type === 'A' || answer.type === 'AAAA') {
-        const name = answer.name;
+        // Normalize hostname to lowercase for case-insensitive matching
+        const name = answer.name.toLowerCase();
         const address = answer.data;
         const ttl = answer.ttl || this.options.ttl;
         

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const MDNSResolver = require('./index');
+const MDNSServer = require('./src/server');
 
 const args = process.argv.slice(2);
 
@@ -11,17 +12,22 @@ PigeonNS - Local mDNS Resolver
 Usage:
   pigeonns resolve <hostname>           Resolve a .local hostname
   pigeonns monitor                      Monitor all mDNS traffic
+  pigeonns serve                        Start HTTP API server for browsers
   pigeonns --help                       Show this help message
 
 Options:
   --type <A|AAAA>                       Record type (default: A)
   --timeout <ms>                        Query timeout in milliseconds (default: 5000)
   --ttl <seconds>                       Cache TTL in seconds (default: 120)
+  --port <number>                       Server port (default: 5380)
+  --host <address>                      Server host (default: localhost)
 
 Examples:
   pigeonns resolve abc123.local
   pigeonns resolve abc123 --type AAAA
   pigeonns monitor
+  pigeonns serve
+  pigeonns serve --port 8080 --host 0.0.0.0
   `);
 }
 
@@ -73,6 +79,36 @@ function monitor() {
   });
 }
 
+async function serve(options) {
+  const server = new MDNSServer({
+    port: options.port || 5380,
+    host: options.host || 'localhost',
+    timeout: options.timeout || 5000,
+    ttl: options.ttl || 120
+  });
+
+  try {
+    const info = await server.start();
+    console.log('PigeonNS HTTP API server started');
+    console.log(`Listening on ${info.url}`);
+    console.log('\nEndpoints:');
+    console.log(`  ${info.url}/resolve?name=<hostname>&type=<A|AAAA>`);
+    console.log(`  ${info.url}/health`);
+    console.log('\nPress Ctrl+C to stop\n');
+
+    // Handle graceful shutdown
+    process.on('SIGINT', async () => {
+      console.log('\nStopping server...');
+      await server.stop();
+      console.log('Server stopped');
+      process.exit(0);
+    });
+  } catch (error) {
+    console.error(`Error starting server: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 function parseArgs(args) {
   const command = args[0];
   const options = {};
@@ -87,6 +123,10 @@ function parseArgs(args) {
       options.timeout = parseInt(args[++i], 10);
     } else if (arg === '--ttl') {
       options.ttl = parseInt(args[++i], 10);
+    } else if (arg === '--port') {
+      options.port = parseInt(args[++i], 10);
+    } else if (arg === '--host') {
+      options.host = args[++i];
     } else if (!hostname) {
       hostname = arg;
     }
@@ -112,6 +152,8 @@ if (command === 'resolve') {
   resolveHostname(hostname, options);
 } else if (command === 'monitor') {
   monitor();
+} else if (command === 'serve') {
+  serve(options);
 } else {
   console.error(`Error: Unknown command '${command}'`);
   printUsage();
